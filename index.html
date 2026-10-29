@@ -27,12 +27,16 @@
     .data th { background: #eef3f9; }
     .data input[type=text] { width: 76px; padding: 5px; border: 1px solid #cbd5e1; }
     .data input.date { width: 108px; }
+    .data input[type=date] { width: 145px; padding: 5px; border: 1px solid #cbd5e1; }
     .muted { font-size: 12px; color: #667; }
 
     /* 2. Wygląd drukowanego dokumentu A4 */
     .sheet { background: white; color: black; width: 210mm; min-height: 297mm; margin: 18px auto; padding: 20mm 14mm; box-shadow: 0 3px 14px #0002; font-family: Arial, sans-serif; break-after: page; }
     .brand { text-align: center; }
     .brand img { display: block; width: 118px; height: auto; margin: 0 auto; }
+    .date-box { position: absolute; right: 0; top: 75px; width: 145px; height: 34px; border: 1px solid #111; background: #c0c0c0; display: flex; align-items: center; justify-content: center; }
+    .date-box input { width: 100%; border: 0; background: transparent; font: 13px Arial, sans-serif; text-align: center; color: #000; padding: 4px; }
+    .sheet-header { position: relative; }
     .doc-title { text-align: center; font-size: 15px; font-weight: bold; font-style: italic; margin: 22px 0 30px; }
     .formgrid { display: grid; grid-template-columns: 35% 65%; margin-bottom: 10px; }
     .formgrid.two { grid-template-columns: 24% 30% 17% 29%; }
@@ -51,6 +55,7 @@
       .no-print { display: none !important; }
       .sheet { margin: 0; box-shadow: none; width: 210mm; min-height: 297mm; break-after: page; }
       .sheet:last-child { break-after: auto; }
+      .date-box { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
     }
     @media (max-width: 850px) {
       .app { padding: 12px; }
@@ -83,7 +88,7 @@
       <div class="scroll">
         <table class="data">
           <thead><tr>
-            <th>Druk</th><th>Pracownik</th><th>Stanowisko</th><th>Data</th>
+            <th>Druk</th><th>Pracownik</th><th>Stanowisko</th><th>Data</th><th>Data dokumentu</th>
             <th>Odbicie wej.</th><th>Odbicie wyj.</th><th>Start dokumentu</th>
             <th>Koniec dokumentu</th><th>Czas</th><th>Brak odbicia</th>
           </tr></thead>
@@ -98,7 +103,7 @@
         <button id="generate">Generuj podgląd</button>
         <button id="print" disabled>Drukuj / Zapisz jako PDF</button>
       </div>
-      <p class="muted">Wszystkie zaznaczone dni jednego pracownika w tym samym miesiącu zostaną zebrane w jeden dokument.</p>
+      <p class="muted">Wpisy jednego pracownika z tego samego miesiąca i z tą samą datą dokumentu zostaną połączone w jeden formularz.</p>
     </section>
   </main>
   <div id="docs"></div>
@@ -174,7 +179,7 @@
         last: clean(row[0]), first: clean(row[1]), job: clean(row[2]),
         day: normalizeDate(row[3]), entry: normalizeTime(row[4]),
         exit: normalizeTime(row[5]), start: normalizeTime(row[6]),
-        end: normalizeTime(row[7]), selected: true
+        end: normalizeTime(row[7]), documentDate: todayLocal(), selected: true
       };
     }
 
@@ -216,6 +221,7 @@
           <td>${escapeHtml(row.last + ' ' + row.first)}</td>
           <td>${escapeHtml(row.job)}</td>
           <td><input type="text" class="date" data-index="${index}" data-field="day" value="${escapeHtml(row.day)}"></td>
+          <td><input type="date" data-index="${index}" data-field="documentDate" value="${escapeHtml(row.documentDate || todayLocal())}" aria-label="Data dokumentu"></td>
           <td>${escapeHtml(row.entry || '—')}</td>
           <td>${escapeHtml(row.exit || '—')}</td>
           <td><input type="text" data-index="${index}" data-field="start" value="${escapeHtml(row.start)}"></td>
@@ -273,12 +279,17 @@
       const groups = new Map();
       for (const row of rows) {
         const parts = row.day.match(/^(\d{1,2})\.(\d{2})\.(\d{4})$/);
-        const key = [row.last.toLocaleUpperCase('pl'), row.first.toLocaleUpperCase('pl'), parts[2], parts[3]].join('|');
+        const key = [row.last.toLocaleUpperCase('pl'), row.first.toLocaleUpperCase('pl'), parts[2], parts[3], row.documentDate].join('|');
         if (!groups.has(key)) groups.set(key, []);
         groups.get(key).push(row);
       }
       return [...groups.values()].map(group => group.sort((a, b) =>
         Number(a.day.split('.')[0]) - Number(b.day.split('.')[0])));
+    }
+
+    function todayLocal() {
+      const d = new Date();
+      return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
     }
 
     // 8. Generowanie dokumentu zgodnego z układem ID Logistics
@@ -298,8 +309,11 @@
 
       return `
         <article class="sheet">
+          <div class="sheet-header">
           <div class="brand"><img src="${LOGO_IDL}" alt="ID Logistics"></div>
+          <div class="date-box"><input type="date" class="print-date" aria-label="Data dokumentu" value="${escapeHtml(employee.documentDate || todayLocal())}" /></div>
           <div class="doc-title">Dokument potwierdzający czas pracy /brak karty IDL</div>
+          </div>
           <div class="formgrid">
             <div class="key">Imię i nazwisko</div>
             <div class="value">${escapeHtml(employee.first + ' ' + employee.last)}</div>
@@ -336,7 +350,7 @@
         $('status').textContent = 'Zaznacz co najmniej jeden wiersz.';
         return;
       }
-      if (selected.some(row => !validDate(row.day) || !validTime(row.start) || !validTime(row.end))) {
+      if (selected.some(row => !validDate(row.day) || !validTime(row.start) || !validTime(row.end) || !/^\d{4}-\d{2}-\d{2}$/.test(row.documentDate || ""))) {
         $('status').textContent = 'Popraw daty i godziny przed generowaniem.';
         return;
       }
