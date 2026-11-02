@@ -28,6 +28,8 @@
     .data input[type=text] { width: 76px; padding: 5px; border: 1px solid #cbd5e1; }
     .data input.date { width: 108px; }
     .data input[type=date] { width: 145px; padding: 5px; border: 1px solid #cbd5e1; }
+    .search-box { width: min(420px, 100%); padding: 10px 12px; border: 1px solid #bdc9d7; border-radius: 8px; font: 14px Arial, sans-serif; }
+    .search-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin: 12px 0; }
     .muted { font-size: 12px; color: #667; }
 
     /* 2. Wygląd drukowanego dokumentu A4 */
@@ -70,21 +72,40 @@
 
     <section class="panel">
       <h3>1. Wprowadź dane</h3>
+      <p class="muted"><strong>Dane ADP</strong> — tabela zawierająca odbicia z czytników oraz godziny zgodne z harmonogramem.</p>
       <div class="controls">
-        <label class="upload">Importuj Excel (.xlsx / .xls)
-          <input id="file" type="file" accept=".xlsx,.xls,.csv">
+        <label class="upload">Importuj plik ADP
+          <input id="fileAdp" type="file" accept=".xlsx,.xls,.csv">
         </label>
-        <button id="paste" class="secondary">Wczytaj wklejoną tabelę</button>
+        <button id="pasteAdp" class="secondary">Wczytaj wklejoną tabelę ADP</button>
         <button id="sample" class="secondary">Przykładowe dane</button>
-        <button id="clear" class="secondary">Wyczyść</button>
+        <button id="downloadAdpTemplate" class="secondary">Pobierz wzór ADP (.xlsx)</button>
+        <button id="showAdpTemplate" class="secondary">Pokaż wzór wklejania ADP</button>
+        <button id="clearAdp" class="secondary">Wyczyść ADP</button>
       </div>
-      <textarea id="raw" placeholder="Wklej komórki z Excela (Ctrl+C / Ctrl+V) albo tabelę Markdown z nagłówkami..."></textarea>
+      <textarea id="rawAdp" placeholder="Wklej tabelę ADP z nagłówkami: Kod pracownika, Nazwisko, Imię, Stanowisko, Dzień, Wejście z czytników, Wyjście z czytników, Rozpoczęcie zgodnie z harmonogramem, Zakończenie zgodnie z harmonogramem..."></textarea>
+
+      <p class="muted"><strong>Dane ABRA</strong> — raport „Brak odbić na wejściu lub wyjściu”.</p>
+      <div class="controls">
+        <label class="upload">Importuj plik ABRA
+          <input id="fileAbra" type="file" accept=".xlsx,.xls,.csv">
+        </label>
+        <button id="pasteAbra" class="secondary">Wczytaj wklejoną tabelę ABRA</button>
+        <button id="downloadAbraTemplate" class="secondary">Pobierz wzór ABRA (.xlsx)</button>
+        <button id="showAbraTemplate" class="secondary">Pokaż wzór wklejania ABRA</button>
+        <button id="clearAbra" class="secondary">Wyczyść ABRA</button>
+      </div>
+      <textarea id="rawAbra" placeholder="Wklej tabelę ABRA z nagłówkami: AbraId, IDS_ID, Imię, Nazwisko, ... Grafik od, Grafik do, Dzień braku, Typ..."></textarea>
       <div id="status" class="muted" role="status">Oczekuję na dane.</div>
     </section>
 
     <section class="panel">
       <h3>2. Sprawdź i popraw dane</h3>
       <p class="muted">Godziny dokumentu pochodzą z harmonogramu. Możesz je poprawić przed wygenerowaniem.</p>
+      <div class="search-row">
+        <input id="employeeSearch" class="search-box" type="search" placeholder="Wyszukaj pracownika po imieniu lub nazwisku..." autocomplete="off">
+        <span id="searchStatus" class="muted">Wyświetlono 0 z 0 rekordów.</span>
+      </div>
       <div class="scroll">
         <table class="data">
           <thead><tr>
@@ -117,6 +138,16 @@
       'lipiec', 'sierpień', 'wrzesień', 'październik', 'listopad', 'grudzień'];
     const $ = id => document.getElementById(id);
     let data = [];
+    const ADP_HEADERS = [
+      'Kod pracownika', 'Nazwisko', 'Imię', 'Stanowisko', 'Dzień',
+      'Wejście z czytników', 'Wyjście z czytników',
+      'Rozpoczęcie zgodnie z harmonogramem', 'Zakończenie zgodnie z harmonogramem'
+    ];
+    const ABRA_HEADERS = [
+      'AbraId', 'IDS_ID', 'Imię', 'Nazwisko', 'Data urodzenia', 'Agencja',
+      'Projekt', 'Dział', 'Lokalizacja', 'Stanowisko', 'Grafik od',
+      'Grafik do', 'Dzień braku', 'Typ'
+    ];
 
     function clean(value) {
       return String(value ?? '').replace(/\u00a0/g, ' ').trim();
@@ -138,8 +169,9 @@
         const minutes = Math.round((value % 1) * 1440) % 1440;
         return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
       }
-      const match = clean(value).match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
-      return match ? `${match[1].padStart(2, '0')}:${match[2]}` : clean(value);
+      const text = clean(value);
+      const match = text.match(/(?:^|[T\s])(\d{1,2}):(\d{2})(?::\d{2})?(?:\s|$)/);
+      return match ? `${match[1].padStart(2, '0')}:${match[2]}` : text;
     }
 
     function normalizeDate(value) {
@@ -150,8 +182,11 @@
         const parsed = XLSX.SSF.parse_date_code(value);
         if (parsed) return `${parsed.d}.${String(parsed.m).padStart(2, '0')}.${parsed.y}`;
       }
-      const match = clean(value).match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/);
-      return match ? `${Number(match[1])}.${String(Number(match[2])).padStart(2, '0')}.${match[3]}` : clean(value);
+      const text = clean(value);
+      const iso = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T\s]|$)/);
+      if (iso) return `${Number(iso[3])}.${String(Number(iso[2])).padStart(2, '0')}.${iso[1]}`;
+      const match = text.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/);
+      return match ? `${Number(match[1])}.${String(Number(match[2])).padStart(2, '0')}.${match[3]}` : text;
     }
 
     function validDate(value) {
@@ -179,7 +214,8 @@
         last: clean(row[0]), first: clean(row[1]), job: clean(row[2]),
         day: normalizeDate(row[3]), entry: normalizeTime(row[4]),
         exit: normalizeTime(row[5]), start: normalizeTime(row[6]),
-        end: normalizeTime(row[7]), documentDate: todayLocal(), selected: true
+        end: normalizeTime(row[7]), documentDate: todayLocal(), selected: true,
+        missingType: '', source: 'ADP'
       };
     }
 
@@ -193,9 +229,12 @@
         .map(line => line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(clean));
     }
 
-    function acceptRows(rows) {
-      const headerIndex = rows.findIndex(row => row.some(cell => /nazwisko/i.test(clean(cell))));
-      if (headerIndex < 0) throw Error('Nie znaleziono nagłówka „Nazwisko”.');
+    function acceptAdpRows(rows) {
+      const headerIndex = rows.findIndex(row =>
+        row.some(cell => /^nazwisko$/i.test(clean(cell))) &&
+        row.some(cell => /^dzień$|^dzien$/i.test(clean(cell)))
+      );
+      if (headerIndex < 0) throw Error('Nie znaleziono nagłówków ADP „Nazwisko” i „Dzień”.');
       const headers = rows[headerIndex].map(cell => clean(cell).toLowerCase().replace(/\s+/g, ' '));
       const patterns = [
         /^nazwisko$/, /^imię$|^imie$/, /stanowisko/, /^dzień$|^dzien$/,
@@ -205,17 +244,113 @@
         /zakończenie zgodnie|zakonczenie zgodnie/
       ];
       const indexes = patterns.map(pattern => headers.findIndex(header => pattern.test(header)));
-      if (indexes.some(index => index < 0)) throw Error('Brakuje wymaganych kolumn. Sprawdź nazwy nagłówków.');
+      if (indexes.some(index => index < 0)) {
+        throw Error('W danych ADP brakuje wymaganych kolumn od „Nazwisko” do „Zakończenie zgodnie z harmonogramem”.');
+      }
       data = rows.slice(headerIndex + 1)
         .filter(row => clean(row[indexes[0]]) && !/^[-:]+$/.test(clean(row[indexes[0]])))
         .map(row => normalizeRow(indexes.map(index => row[index])));
       renderRows();
-      $('status').textContent = `Wczytano ${data.length} wierszy.`;
+      $('status').textContent = `Wczytano ${data.length} wierszy z ADP.`;
+    }
+
+    function normalizeAbraType(value) {
+      const text = clean(value).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      if (text.includes('obu')) return 'Oba';
+      if (text.includes('wejsciu')) return 'Wejście';
+      if (text.includes('wyjsciu')) return 'Wyjście';
+      return clean(value) || 'Nieokreślony';
+    }
+
+    function acceptAbraRows(rows) {
+      const headerIndex = rows.findIndex(row =>
+        row.some(cell => /^abraid$/i.test(clean(cell))) &&
+        row.some(cell => /^nazwisko$/i.test(clean(cell)))
+      );
+      if (headerIndex < 0) throw Error('Nie znaleziono nagłówka ABRA z kolumnami „AbraId” i „Nazwisko”.');
+
+      const headers = rows[headerIndex].map(cell => clean(cell).toLowerCase().replace(/\s+/g, ' '));
+      const patterns = [
+        /^nazwisko$/, /^imię$|^imie$/, /stanowisko/,
+        /^dzień braku$|^dzien braku$/, /^grafik od$/, /^grafik do$/, /^typ$/
+      ];
+      const indexes = patterns.map(pattern => headers.findIndex(header => pattern.test(header)));
+      if (indexes.some(index => index < 0)) {
+        throw Error('W raporcie ABRA brakuje wymaganych kolumn: Imię, Nazwisko, Stanowisko, Grafik od, Grafik do, Dzień braku lub Typ.');
+      }
+
+      data = rows.slice(headerIndex + 1)
+        .filter(row => clean(row[indexes[0]]) && clean(row[indexes[1]]))
+        .map(row => {
+          const missingType = normalizeAbraType(row[indexes[6]]);
+          return {
+            last: clean(row[indexes[0]]),
+            first: clean(row[indexes[1]]),
+            job: clean(row[indexes[2]]),
+            day: normalizeDate(row[indexes[3]]),
+            entry: missingType === 'Wejście' || missingType === 'Oba' ? '' : 'Zarejestrowano',
+            exit: missingType === 'Wyjście' || missingType === 'Oba' ? '' : 'Zarejestrowano',
+            start: normalizeTime(row[indexes[4]]),
+            end: normalizeTime(row[indexes[5]]),
+            documentDate: todayLocal(),
+            selected: true,
+            missingType,
+            source: 'ABRA'
+          };
+        });
+
+      renderRows();
+      $('status').textContent = `Wczytano ${data.length} wierszy z ABRA.`;
+    }
+
+    async function readExcelRows(file) {
+      if (typeof XLSX === 'undefined') throw Error('Biblioteka Excel nie została załadowana. Sprawdź połączenie z internetem.');
+      const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      return XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: true });
+    }
+
+    function missingLabel(row) {
+      if (row.missingType) return row.missingType;
+      return !row.entry && !row.exit ? 'Oba' : !row.entry ? 'Wejście' : !row.exit ? 'Wyjście' : 'Brak';
+    }
+
+    function showPasteTemplate(source) {
+      const isAdp = source === 'ADP';
+      const target = $(isAdp ? 'rawAdp' : 'rawAbra');
+      target.value = (isAdp ? ADP_HEADERS : ABRA_HEADERS).join('\t');
+      target.focus();
+      $('status').textContent = `Pokazano pusty wzór wklejania ${source} — bez danych pracowników.`;
+    }
+
+    function downloadTemplate(source) {
+      try {
+        if (typeof XLSX === 'undefined') throw Error('Biblioteka Excel nie została załadowana. Sprawdź połączenie z internetem.');
+        const headers = source === 'ADP' ? ADP_HEADERS : ABRA_HEADERS;
+        const worksheet = XLSX.utils.aoa_to_sheet([headers]);
+        worksheet['!cols'] = headers.map(header => ({ wch: Math.max(14, Math.min(38, header.length + 3)) }));
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, worksheet, source);
+        XLSX.writeFile(workbook, `Wzor_importu_${source}.xlsx`);
+        $('status').textContent = `Pobrano pusty wzór importu ${source} — bez danych pracowników.`;
+      } catch (error) {
+        $('status').textContent = `Błąd pobierania wzoru ${source}: ${error.message}`;
+      }
+    }
+
+    function searchKey(value) {
+      return clean(value).toLocaleLowerCase('pl').replace(/ł/g, 'l')
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
     }
 
     // 6. Edycja i podgląd danych
     function renderRows() {
-      $('rows').innerHTML = data.map((row, index) => `
+      const query = searchKey($('employeeSearch').value);
+      const visibleRows = data
+        .map((row, index) => ({ row, index }))
+        .filter(({ row }) => !query || searchKey(`${row.first} ${row.last} ${row.last} ${row.first}`).includes(query));
+
+      $('rows').innerHTML = visibleRows.map(({ row, index }) => `
         <tr>
           <td><input type="checkbox" data-index="${index}" data-field="selected" ${row.selected ? 'checked' : ''}></td>
           <td>${escapeHtml(row.last + ' ' + row.first)}</td>
@@ -227,11 +362,14 @@
           <td><input type="text" data-index="${index}" data-field="start" value="${escapeHtml(row.start)}"></td>
           <td><input type="text" data-index="${index}" data-field="end" value="${escapeHtml(row.end)}"></td>
           <td>${duration(row.start, row.end)}</td>
-          <td>${!row.entry && !row.exit ? 'Oba' : !row.entry ? 'Wejście' : !row.exit ? 'Wyjście' : 'Brak'}</td>
+          <td>${escapeHtml(missingLabel(row))}</td>
         </tr>`).join('');
+      $('searchStatus').textContent = `Wyświetlono ${visibleRows.length} z ${data.length} rekordów.`;
       $('docs').innerHTML = '';
       $('print').disabled = true;
     }
+
+    $('employeeSearch').addEventListener('input', renderRows);
 
     $('rows').addEventListener('change', event => {
       const input = event.target;
@@ -241,33 +379,58 @@
       renderRows();
     });
 
-    $('file').addEventListener('change', async event => {
+    $('fileAdp').addEventListener('change', async event => {
       try {
         const file = event.target.files[0];
         if (!file) return;
-        if (typeof XLSX === 'undefined') throw Error('Biblioteka Excel nie została załadowana. Sprawdź połączenie z internetem.');
-        const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
-        const sheet = workbook.Sheets[workbook.SheetNames[0]];
-        acceptRows(XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: true }));
+        acceptAdpRows(await readExcelRows(file));
       } catch (error) {
-        $('status').textContent = 'Błąd importu: ' + error.message;
+        $('status').textContent = 'Błąd importu ADP: ' + error.message;
       }
     });
 
-    $('paste').addEventListener('click', () => {
-      try { acceptRows(parseText($('raw').value)); }
-      catch (error) { $('status').textContent = 'Błąd: ' + error.message; }
+    $('fileAbra').addEventListener('change', async event => {
+      try {
+        const file = event.target.files[0];
+        if (!file) return;
+        acceptAbraRows(await readExcelRows(file));
+      } catch (error) {
+        $('status').textContent = 'Błąd importu ABRA: ' + error.message;
+      }
     });
 
-    $('clear').addEventListener('click', () => {
-      data = [];
-      $('raw').value = '';
-      $('file').value = '';
+    $('pasteAdp').addEventListener('click', () => {
+      try { acceptAdpRows(parseText($('rawAdp').value)); }
+      catch (error) { $('status').textContent = 'Błąd wklejania ADP: ' + error.message; }
+    });
+
+    $('pasteAbra').addEventListener('click', () => {
+      try { acceptAbraRows(parseText($('rawAbra').value)); }
+      catch (error) { $('status').textContent = 'Błąd wklejania ABRA: ' + error.message; }
+    });
+
+    $('downloadAdpTemplate').addEventListener('click', () => downloadTemplate('ADP'));
+    $('showAdpTemplate').addEventListener('click', () => showPasteTemplate('ADP'));
+    $('downloadAbraTemplate').addEventListener('click', () => downloadTemplate('ABRA'));
+    $('showAbraTemplate').addEventListener('click', () => showPasteTemplate('ABRA'));
+
+    function clearSource(source) {
+      data = data.filter(row => row.source !== source);
+      if (source === 'ADP') {
+        $('rawAdp').value = '';
+        $('fileAdp').value = '';
+      } else {
+        $('rawAbra').value = '';
+        $('fileAbra').value = '';
+      }
       renderRows();
-      $('status').textContent = 'Wyczyszczono.';
-    });
+      $('status').textContent = `Wyczyszczono dane ${source}.`;
+    }
 
-    $('sample').addEventListener('click', () => acceptRows([
+    $('clearAdp').addEventListener('click', () => clearSource('ADP'));
+    $('clearAbra').addEventListener('click', () => clearSource('ABRA'));
+
+    $('sample').addEventListener('click', () => acceptAdpRows([
       ['Nazwisko', 'Imię', 'Stanowisko', 'Dzień', 'Wejście z czytników', 'Wyjście z czytników', 'Rozpoczęcie zgodnie z harmonogramem', 'Zakończenie zgodnie z harmonogramem'],
       ['KOŁODZIEJ', 'PRZEMYSŁAW', 'Specjalista ds. logistyki', '2.06.2026', '', '22:02', '14:00', '22:00'],
       ['KOŁODZIEJ', 'PRZEMYSŁAW', 'Specjalista ds. logistyki', '5.06.2026', '05:58', '', '06:00', '18:00'],
