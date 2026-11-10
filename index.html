@@ -36,10 +36,9 @@
     .sheet { background: white; color: black; width: 210mm; min-height: 297mm; margin: 18px auto; padding: 20mm 14mm; box-shadow: 0 3px 14px #0002; font-family: Arial, sans-serif; break-after: page; }
     .brand { text-align: center; }
     .brand img { display: block; width: 118px; height: auto; margin: 0 auto; }
-    .date-box { position: absolute; right: 0; top: 75px; width: 145px; height: 34px; border: 1px solid #111; background: #c0c0c0; display: flex; align-items: center; justify-content: center; }
-    .date-box input { width: 100%; border: 0; background: transparent; font: 13px Arial, sans-serif; text-align: center; color: #000; padding: 4px; }
+    .agency-box { position: static; width: 230px; max-width: 100%; margin: 0 0 14px auto; min-height: 34px; padding: 6px; overflow-wrap: anywhere; font-size: 13px; text-align: center; border: 1px solid #111; background: #c0c0c0; display: flex; align-items: center; justify-content: center; }
     .sheet-header { position: relative; }
-    .doc-title { text-align: center; font-size: 15px; font-weight: bold; font-style: italic; margin: 22px 0 30px; }
+    .doc-title { text-align: center; font-size: 15px; font-weight: bold; font-style: italic; margin: 22px 0 14px; }
     .formgrid { display: grid; grid-template-columns: 35% 65%; margin-bottom: 10px; }
     .formgrid.two { grid-template-columns: 24% 30% 17% 29%; }
     .formgrid > div { border: 2px solid black; padding: 9px; min-height: 38px; font-size: 12px; }
@@ -57,7 +56,7 @@
       .no-print { display: none !important; }
       .sheet { margin: 0; box-shadow: none; width: 210mm; min-height: 297mm; break-after: page; }
       .sheet:last-child { break-after: auto; }
-      .date-box { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+      .agency-box { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
     }
     @media (max-width: 850px) {
       .app { padding: 12px; }
@@ -95,7 +94,7 @@
         <button id="showAbraTemplate" class="secondary">Pokaż wzór wklejania ABRA</button>
         <button id="clearAbra" class="secondary">Wyczyść ABRA</button>
       </div>
-      <textarea id="rawAbra" placeholder="Wklej tabelę ABRA z nagłówkami: AbraId, IDS_ID, Imię, Nazwisko, ... Grafik od, Grafik do, Dzień braku, Typ..."></textarea>
+      <textarea id="rawAbra" placeholder="Wklej tabelę ABRA z nagłówkami: AbraId, IDS_ID, Imię, Nazwisko, Agencja, Grafik od, Grafik do, Dzień braku, Typ..."></textarea>
       <div id="status" class="muted" role="status">Oczekuję na dane.</div>
     </section>
 
@@ -109,7 +108,7 @@
       <div class="scroll">
         <table class="data">
           <thead><tr>
-            <th>Druk</th><th>Pracownik</th><th>Stanowisko</th><th>Data</th><th>Data dokumentu</th>
+            <th>Druk</th><th>Pracownik</th><th>Stanowisko</th><th>Data</th><th>Agencja</th>
             <th>Odbicie wej.</th><th>Odbicie wyj.</th><th>Start dokumentu</th>
             <th>Koniec dokumentu</th><th>Czas</th><th>Brak odbicia</th>
           </tr></thead>
@@ -120,11 +119,18 @@
 
     <section class="panel">
       <h3>3. Wygeneruj dokumenty</h3>
+      <div class="controls" style="margin-bottom:12px">
+        <label for="documentMode"><strong>Sposób generowania:</strong></label>
+        <select id="documentMode" style="max-width:100%;padding:10px;border:1px solid #bdc9d7;border-radius:7px;font:14px Arial,sans-serif">
+          <option value="employee">Wszystkie dni pracownika na jednym formularzu</option>
+          <option value="day">Każdy dzień pracownika na osobnej kartce</option>
+        </select>
+      </div>
       <div class="controls">
         <button id="generate">Generuj podgląd</button>
         <button id="print" disabled>Drukuj / Zapisz jako PDF</button>
       </div>
-      <p class="muted">Wpisy jednego pracownika z tego samego miesiąca i z tą samą datą dokumentu zostaną połączone w jeden formularz.</p>
+      <p class="muted">Wybierz formularz zbiorczy dla pracownika (w obrębie miesiąca i agencji) lub osobny dla każdego dnia. Drukowane są zaznaczone wpisy. Agencja: ADP — IDL; ABRA — wartość z kolumny „Agencja”.</p>
     </section>
   </main>
   <div id="docs"></div>
@@ -151,6 +157,10 @@
 
     function clean(value) {
       return String(value ?? '').replace(/\u00a0/g, ' ').trim();
+    }
+
+    function normalizeAgency(value) {
+      return clean(value).replace(/\bsp\s*\.?\s*z\s*\.?\s*o\s*\.?\s*o\s*\.?(?=\s|$|[,;)])/gi, '').replace(/\s+/g, ' ').trim();
     }
 
     function escapeHtml(value) {
@@ -214,7 +224,7 @@
         last: clean(row[0]), first: clean(row[1]), job: clean(row[2]),
         day: normalizeDate(row[3]), entry: normalizeTime(row[4]),
         exit: normalizeTime(row[5]), start: normalizeTime(row[6]),
-        end: normalizeTime(row[7]), documentDate: todayLocal(), selected: true,
+        end: normalizeTime(row[7]), agency: 'IDL', selected: true,
         missingType: '', source: 'ADP'
       };
     }
@@ -272,11 +282,11 @@
       const headers = rows[headerIndex].map(cell => clean(cell).toLowerCase().replace(/\s+/g, ' '));
       const patterns = [
         /^nazwisko$/, /^imię$|^imie$/, /stanowisko/,
-        /^dzień braku$|^dzien braku$/, /^grafik od$/, /^grafik do$/, /^typ$/
+        /^dzień braku$|^dzien braku$/, /^grafik od$/, /^grafik do$/, /^typ$/, /^agencja$/
       ];
       const indexes = patterns.map(pattern => headers.findIndex(header => pattern.test(header)));
       if (indexes.some(index => index < 0)) {
-        throw Error('W raporcie ABRA brakuje wymaganych kolumn: Imię, Nazwisko, Stanowisko, Grafik od, Grafik do, Dzień braku lub Typ.');
+        throw Error('W raporcie ABRA brakuje wymaganych kolumn: Imię, Nazwisko, Stanowisko, Grafik od, Grafik do, Dzień braku, Typ lub Agencja.');
       }
 
       data = rows.slice(headerIndex + 1)
@@ -292,7 +302,7 @@
             exit: missingType === 'Wyjście' || missingType === 'Oba' ? '' : 'Zarejestrowano',
             start: normalizeTime(row[indexes[4]]),
             end: normalizeTime(row[indexes[5]]),
-            documentDate: todayLocal(),
+            agency: normalizeAgency(row[indexes[7]]),
             selected: true,
             missingType,
             source: 'ABRA'
@@ -356,7 +366,7 @@
           <td>${escapeHtml(row.last + ' ' + row.first)}</td>
           <td>${escapeHtml(row.job)}</td>
           <td><input type="text" class="date" data-index="${index}" data-field="day" value="${escapeHtml(row.day)}"></td>
-          <td><input type="date" data-index="${index}" data-field="documentDate" value="${escapeHtml(row.documentDate || todayLocal())}" aria-label="Data dokumentu"></td>
+          <td><input type="text" style="width:150px" data-index="${index}" data-field="agency" value="${escapeHtml(normalizeAgency(row.agency))}" aria-label="Agencja" ${row.source === 'ADP' ? 'readonly' : ''}></td>
           <td>${escapeHtml(row.entry || '—')}</td>
           <td>${escapeHtml(row.exit || '—')}</td>
           <td><input type="text" data-index="${index}" data-field="start" value="${escapeHtml(row.start)}"></td>
@@ -376,6 +386,7 @@
       if (input.dataset.index == null) return;
       const row = data[Number(input.dataset.index)];
       row[input.dataset.field] = input.type === 'checkbox' ? input.checked : input.value;
+      if (input.dataset.field === 'agency') row.agency = normalizeAgency(row.agency);
       renderRows();
     });
 
@@ -437,12 +448,15 @@
       ['NOWOCIN', 'ADRIAN', 'Klucz.operator wózka widłowego', '2.06.2026', '', '06:00', '18:00', '06:00']
     ]));
 
-    // 7. Grupowanie: pracownik + miesiąc + rok
-    function groupDocuments(rows) {
+    // 7. Grupowanie według wybranego sposobu generowania
+    function groupDocuments(rows, mode = $('documentMode').value) {
       const groups = new Map();
       for (const row of rows) {
         const parts = row.day.match(/^(\d{1,2})\.(\d{2})\.(\d{4})$/);
-        const key = [row.last.toLocaleUpperCase('pl'), row.first.toLocaleUpperCase('pl'), parts[2], parts[3], row.documentDate].join('|');
+        const key = JSON.stringify([
+          row.last.toLocaleUpperCase('pl'), row.first.toLocaleUpperCase('pl'),
+          row.agency, parts[2], parts[3], mode === 'day' ? Number(parts[1]) : null
+        ]);
         if (!groups.has(key)) groups.set(key, []);
         groups.get(key).push(row);
       }
@@ -450,10 +464,11 @@
         Number(a.day.split('.')[0]) - Number(b.day.split('.')[0])));
     }
 
-    function todayLocal() {
-      const d = new Date();
-      return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-    }
+    $('documentMode').addEventListener('change', () => {
+      $('docs').innerHTML = '';
+      $('print').disabled = true;
+      $('status').textContent = 'Zmieniono sposób generowania. Kliknij „Generuj podgląd”.';
+    });
 
     // 8. Generowanie dokumentu zgodnego z układem ID Logistics
     function makeDocument(group) {
@@ -474,8 +489,8 @@
         <article class="sheet">
           <div class="sheet-header">
           <div class="brand"><img src="${LOGO_IDL}" alt="ID Logistics"></div>
-          <div class="date-box"><input type="date" class="print-date" aria-label="Data dokumentu" value="${escapeHtml(employee.documentDate || todayLocal())}" /></div>
           <div class="doc-title">Dokument potwierdzający czas pracy /brak karty IDL</div>
+          <div class="agency-box"><span>${escapeHtml(normalizeAgency(employee.agency))}</span></div>
           </div>
           <div class="formgrid">
             <div class="key">Imię i nazwisko</div>
@@ -513,8 +528,12 @@
         $('status').textContent = 'Zaznacz co najmniej jeden wiersz.';
         return;
       }
-      if (selected.some(row => !validDate(row.day) || !validTime(row.start) || !validTime(row.end) || !/^\d{4}-\d{2}-\d{2}$/.test(row.documentDate || ""))) {
+      if (selected.some(row => !validDate(row.day) || !validTime(row.start) || !validTime(row.end))) {
         $('status').textContent = 'Popraw daty i godziny przed generowaniem.';
+        return;
+      }
+      if (selected.some(row => !clean(row.agency))) {
+        $('status').textContent = 'Uzupełnij agencję w zaznaczonych wierszach przed generowaniem.';
         return;
       }
       const groups = groupDocuments(selected);
